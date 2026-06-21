@@ -1,0 +1,58 @@
+# Cilium (OSS) values — EKS, replacing AWS VPC CNI.
+# Rendered by Terraform (cilium.tf) with the EKS API endpoint injected.
+
+# --- ENI / IPAM: Cilium owns pod IPs using AWS ENIs (VPC-native) ---------
+eni:
+  enabled: true
+ipam:
+  mode: eni
+egressMasqueradeInterfaces: eth0+
+routingMode: native
+endpointRoutes:
+  enabled: true
+
+# --- kube-proxy replacement ----------------------------------------------
+kubeProxyReplacement: true
+k8sServiceHost: "${eks_api_host}"
+k8sServicePort: "${eks_api_port}"
+
+# --- Node-to-node encryption (WireGuard) ---------------------------------
+encryption:
+  enabled: true
+  type: wireguard
+  nodeEncryption: true
+
+# --- Observability: Hubble + Hubble UI -----------------------------------
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+  metrics:
+    enableOpenMetrics: true
+    enabled:
+      - dns
+      - drop
+      - tcp
+      - flow
+      - icmp
+      - http
+
+# --- ClusterMesh (ready to pair with another cluster) --------------------
+clustermesh:
+  useAPIServer: true
+  apiserver:
+    service:
+      type: LoadBalancer
+cluster:
+  name: isovalent-syd
+  id: 1
+
+# --- Operator / general ---------------------------------------------------
+operator:
+  replicas: 2
+
+# Tolerate freshly-joined nodes that have no CNI yet.
+tolerations:
+  - operator: Exists

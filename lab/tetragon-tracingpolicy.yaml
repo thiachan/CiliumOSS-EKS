@@ -1,0 +1,31 @@
+# Tetragon TracingPolicy: observe sensitive runtime activity across the cluster.
+# Flags process exec writing to /etc/passwd or /etc/shadow and tcp connect events.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: "lab-file-and-network-monitoring"
+spec:
+  kprobes:
+    - call: "security_file_permission"
+      syscall: false
+      return: true
+      args:
+        - index: 0
+          type: "file"
+        - index: 1
+          type: "int"
+      returnArg:
+        index: 0
+        type: "int"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Prefix"
+              values:
+                - "/etc/passwd"
+                - "/etc/shadow"
+    - call: "tcp_connect"
+      syscall: false
+      args:
+        - index: 0
+          type: "sock"

@@ -1,0 +1,24 @@
+# Classic Cilium L7 demo: X-wings (allied) may POST /v1/request-landing on the
+# deathstar; the trapped tie-fighter (empire) and any PUT /v1/exhaust-port are denied.
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: "rule-deathstar"
+spec:
+  description: "L7 policy to restrict access to the deathstar landing API"
+  endpointSelector:
+    matchLabels:
+      org: empire
+      class: deathstar
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            org: alliance
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP
+          rules:
+            http:
+              - method: "POST"
+                path: "/v1/request-landing"
