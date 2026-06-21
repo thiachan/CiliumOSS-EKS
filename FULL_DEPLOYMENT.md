@@ -363,6 +363,102 @@ $ ./lab/deploy.sh
 Done.
 ```
 
+### 9.0 Where everything lives — namespaces, pods, and nodes (read this first)
+
+This is the mental model for the whole cluster. Kubernetes groups workloads into
+**namespaces**. Different parts of this lab land in different namespaces, which is why
+`kubectl get pods` (with no `-n`) only shows a few pods — by default it looks **only at the
+`default` namespace**.
+
+| Component | Namespace | What runs there | How it's scheduled |
+|-----------|-----------|-----------------|--------------------|
+| **Cilium** (CNI, Hubble, ClusterMesh) | `kube-system` | `cilium` agent (1 pod **per node**, a DaemonSet), `cilium-operator`, `hubble-relay`, `hubble-ui`, `clustermesh-apiserver` | agent runs on **every** node; operator/relay/ui are single deployments |
+| **Tetragon** (runtime security) | `kube-system` | `tetragon` agent (1 pod **per node**, a DaemonSet), `tetragon-operator` | agent runs on **every** node |
+| **Star Wars demo** | `default` | `deathstar` (2 pods), `xwing`, `tiefighter` | scheduled across the 2 worker nodes |
+| **Online Boutique** | `boutique` | `frontend`, `cartservice`, `checkoutservice`, `productcatalogservice`, `redis-cart`, `loadgenerator`, … (11 services) | scheduled across the 2 worker nodes |
+| **CoreDNS** (cluster DNS) | `kube-system` | `coredns` (2 pods) | spread across nodes |
+
+> **Why `kubectl get pods` looked almost empty:** it defaults to the `default` namespace,
+> which only contains the Star Wars demo. Everything else is in `kube-system` or `boutique`.
+
+#### 9.0.1 See *everything*, in *every* namespace, and *which node* each pod is on
+
+```bash
+# Every pod in every namespace, with the node it's running on (-o wide shows NODE)
+$ kubectl get pods -A -o wide
+```
+
+Example (trimmed) output — note the `NAMESPACE` (left) and `NODE` (right) columns:
+
+```
+NAMESPACE     NAME                          READY   STATUS    NODE
+boutique      frontend-548c468bb9-cgk4g     1/1     Running   ip-10-42-47-112...
+boutique      cartservice-7f7b9fc469-8bwf6  1/1     Running   ip-10-42-5-120...
+boutique      redis-cart-7ff8f4d6ff-jmw6z   1/1     Running   ip-10-42-47-112...
+default       deathstar-689f66b57d-2ccj7    1/1     Running   ip-10-42-5-120...
+default       xwing                         1/1     Running   ip-10-42-47-112...
+kube-system   cilium-nmfcp                  1/1     Running   ip-10-42-47-112...
+kube-system   cilium-pxb2c                  1/1     Running   ip-10-42-5-120...
+kube-system   tetragon-kxf7q                2/2     Running   ip-10-42-47-112...
+kube-system   tetragon-v7p5f                2/2     Running   ip-10-42-5-120...
+kube-system   hubble-ui-...                 2/2     Running   ip-10-42-5-120...
+```
+
+#### 9.0.2 List the namespaces themselves
+
+```bash
+$ kubectl get namespaces
+NAME              STATUS   AGE
+boutique          Active   2h      # Online Boutique
+default           Active   3h      # Star Wars demo
+kube-system       Active   3h      # Cilium, Tetragon, Hubble, CoreDNS
+...
+```
+
+#### 9.0.3 Look at each component on its own
+
+```bash
+# --- Online Boutique ---
+$ kubectl -n boutique get pods -o wide          # the 11 microservices + load generator
+$ kubectl -n boutique get svc                   # ClusterIP services + the public frontend LB
+
+# --- Star Wars demo ---
+$ kubectl -n default get pods -o wide           # deathstar (x2), xwing, tiefighter
+$ kubectl -n default get cnp                    # the L7 CiliumNetworkPolicy 'rule-deathstar'
+
+# --- Cilium (CNI + Hubble) ---
+$ kubectl -n kube-system get pods -o wide -l k8s-app=cilium        # one agent per node
+$ kubectl -n kube-system get deploy -l k8s-app=cilium-operator     # operator
+$ kubectl -n kube-system get pods | grep hubble                    # relay + ui
+
+# --- Tetragon ---
+$ kubectl -n kube-system get pods -o wide -l app.kubernetes.io/name=tetragon
+
+# --- DaemonSets prove "one pod per node" (DESIRED == number of nodes) ---
+$ kubectl -n kube-system get ds
+NAME       DESIRED   CURRENT   READY   NODE SELECTOR     AGE
+cilium     2         2         2       kubernetes.io/os=linux   2h
+tetragon   2         2         2       <none>            2h
+```
+
+#### 9.0.4 Map it the other way: which pods are on a given node
+
+```bash
+$ kubectl get nodes                              # the 2 worker nodes
+# Show all pods scheduled onto one specific node:
+$ kubectl get pods -A -o wide --field-selector spec.nodeName=ip-10-42-47-112.ap-southeast-2.compute.internal
+# Or full node detail incl. the pods it hosts:
+$ kubectl describe node ip-10-42-47-112.ap-southeast-2.compute.internal
+```
+
+#### 9.0.5 Visualize it in Hubble (optional but great for learning)
+
+```bash
+$ cilium hubble ui        # pick the 'boutique' namespace to see the live service map
+```
+
+With this map in mind, the rest of Section 9 zooms into each component.
+
 ### 9.1 Watch Online Boutique come up
 
 ```bash
