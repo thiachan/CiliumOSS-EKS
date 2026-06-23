@@ -1,6 +1,6 @@
 # ISOVALENT FEATURES — Essential to Advanced Activities
 
-A hands-on lab guide for everything you can do with the **open-source Isovalent stack**
+A hands-on lab guide for everything you can do with the **Isovalent Enterprise stack**
 (Cilium + Hubble + Tetragon) on the cluster built by this repo (`isovalent-syd`,
 `ap-southeast-2`). Work top to bottom, or jump to a feature.
 

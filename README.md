@@ -1,11 +1,12 @@
-# CiliumOSS-EKS
+# CiliumEnterprise-EKS
 
 Provision an **Amazon EKS** cluster in **AWS Sydney (`ap-southeast-2`)** and run the
-**free / open-source Isovalent stack** — **Cilium** (as a full replacement for the AWS
+**Isovalent Enterprise stack** — **Cilium** (as a full replacement for the AWS
 VPC CNI) plus **Tetragon** for runtime security — entirely with **Terraform**.
 
-> No Isovalent Enterprise license required. This installs the upstream `cilium/cilium`
-> and `cilium/tetragon` Helm charts, the OSS foundation of the Isovalent platform.
+> Requires an Isovalent/Cisco Enterprise licence and image pull secret. This installs the
+> `isovalent/cilium` and `isovalent/tetragon` Enterprise Helm charts from
+> `helm.isovalent.com`.
 
 > **Course map:** **Part 0 · Orientation (this page)** → [Part 1 · Build & Verify](FULL_DEPLOYMENT.md) → [Part 2 · Operate & Explore](ISOVALENT_FEATURES.md)
 >
@@ -18,7 +19,7 @@ VPC CNI) plus **Tetragon** for runtime security — entirely with **Terraform**.
 | Area | Detail |
 |------|--------|
 | Region | `ap-southeast-2` (Sydney) |
-| Control plane | Amazon EKS, Kubernetes `1.30` |
+| Control plane | Amazon EKS, Kubernetes `1.36` |
 | Compute | Managed node group, 2 × `m5.large` |
 | CNI | **Cilium in ENI mode**, replacing `aws-node` (AWS VPC CNI) |
 | Service routing | **kube-proxy replacement** (no `kube-proxy`) |
@@ -26,6 +27,7 @@ VPC CNI) plus **Tetragon** for runtime security — entirely with **Terraform**.
 | Observability | **Hubble** + **Hubble UI** |
 | Runtime security | **Tetragon** + a sample `TracingPolicy` |
 | Multi-cluster | **ClusterMesh** API server (ready to pair) |
+| Historical forensics | **Hubble Timescape** (opt-in) — correlated network + runtime history backed by ClickHouse |
 | Lab apps | Google Online Boutique, Cilium Star Wars L7 demo |
 
 ## Architecture
@@ -40,7 +42,7 @@ flowchart TB
     YOU["Your Mac<br/>terraform · kubectl · cilium · hubble"]
     subgraph AWS["AWS · ap-southeast-2 (Sydney)"]
         subgraph VPC["VPC 10.42.0.0/16 · 3 AZs · NAT gateway"]
-            subgraph EKS["EKS cluster: isovalent-syd (k8s 1.30)"]
+            subgraph EKS["EKS cluster: isovalent-syd (k8s 1.36)"]
                 CP["Control plane (AWS-managed)<br/>API server · etcd · scheduler"]
                 subgraph NG["Managed node group · 2 × m5.large"]
                     subgraph N1["Worker node 1"]
@@ -83,6 +85,7 @@ flowchart TB
 │   ├── eks.tf                    # EKS cluster + managed node group
 │   ├── cilium.tf                 # bootstrap (strip VPC CNI) + Cilium Helm release
 │   ├── tetragon.tf               # Tetragon Helm release
+│   ├── timescape.tf              # opt-in: Hubble Timescape + ClickHouse (push mode)
 │   └── outputs.tf                # cluster name/endpoint/kubeconfig command
 ├── cilium/
 │   └── values.yaml.tftpl         # templated Cilium Helm values
@@ -92,6 +95,7 @@ flowchart TB
 │   └── tetragon-tracingpolicy.yaml
 └── sidenote/                     # side notes, not part of the course
     ├── OCP_Only.md
+    ├── OCP_Keep_OVN.md
     └── SG_Audit_Notes.md
 ```
 
@@ -122,10 +126,18 @@ flowchart LR
 ```bash
 cd terraform
 terraform init
+
+# Enterprise images pull from quay.io/isovalent — supply the Isovalent/Cisco
+# pull secret out-of-band (never commit it):
+export TF_VAR_isovalent_pull_secret_json="$(cat isovalent-pull-secret.json)"
+
 terraform apply
 aws eks update-kubeconfig --region ap-southeast-2 --name isovalent-syd
 ../lab/deploy.sh
 ```
+
+> **Add Hubble Timescape (optional).** Stand up the correlated network + runtime history
+> store (ClickHouse-backed, push mode) with `terraform apply -var enable_timescape=true`.
 
 > **New here, or want every command, gotcha and verification step?**
 > Read **[FULL_DEPLOYMENT.md](FULL_DEPLOYMENT.md)** — a complete, manual, copy-paste

@@ -26,11 +26,30 @@ resource "null_resource" "remove_default_cni" {
 # replacement can reach the API server directly.
 locals {
   eks_api_host = replace(module.eks.cluster_endpoint, "https://", "")
+
+  # Only wire up the pull secret when its JSON has been supplied.
+  create_pull_secret = trimspace(var.isovalent_pull_secret_json) != ""
+}
+
+# Image pull secret for the Isovalent Enterprise images on quay.io/isovalent.
+resource "kubernetes_secret" "isovalent_pull_secret" {
+  count = local.create_pull_secret ? 1 : 0
+
+  metadata {
+    name      = var.isovalent_pull_secret_name
+    namespace = "kube-system"
+  }
+
+  type = "kubernetes.io/dockerconfigjson"
+
+  data = {
+    ".dockerconfigjson" = var.isovalent_pull_secret_json
+  }
 }
 
 resource "helm_release" "cilium" {
   name       = "cilium"
-  repository = "https://helm.cilium.io"
+  repository = var.isovalent_helm_repo
   chart      = "cilium"
   version    = var.cilium_version
   namespace  = "kube-system"
@@ -41,10 +60,15 @@ resource "helm_release" "cilium" {
 
   values = [
     templatefile("${path.module}/../cilium/values.yaml.tftpl", {
-      eks_api_host = local.eks_api_host
-      eks_api_port = "443"
+      eks_api_host     = local.eks_api_host
+      eks_api_port     = "443"
+      pull_secret_name = local.create_pull_secret ? var.isovalent_pull_secret_name : ""
+      timescape_target = var.enable_timescape ? "hubble-timescape-ingester.${var.timescape_namespace}.svc.cluster.local:4260" : ""
     })
   ]
 
-  depends_on = [null_resource.remove_default_cni]
+  depends_on = [
+    null_resource.remove_default_cni,
+    kubernetes_secret.isovalent_pull_secret,
+  ]
 }

@@ -1,6 +1,11 @@
-# Cilium (OSS) values — EKS, replacing AWS VPC CNI.
+# Cilium (Isovalent Enterprise) values — EKS, replacing AWS VPC CNI.
 # Rendered by Terraform (cilium.tf) with the EKS API endpoint injected.
 
+%{ if pull_secret_name != "" ~}
+# --- Enterprise image pull secret (quay.io/isovalent) --------------------
+imagePullSecrets:
+  - name: ${pull_secret_name}
+%{ endif ~}
 # --- ENI / IPAM: Cilium owns pod IPs using AWS ENIs (VPC-native) ---------
 eni:
   enabled: true
@@ -38,6 +43,17 @@ hubble:
       - flow
       - icmp
       - http
+%{ if timescape_target != "" ~}
+  # --- Flow export → Hubble Timescape (push mode) ------------------------
+  # Cilium streams flows directly to the Timescape ingester's gRPC push API;
+  # the ingester writes them to ClickHouse. No object storage required.
+  export:
+    timescape:
+      enabled: true
+      target: "${timescape_target}"
+      tls:
+        enabled: false
+%{ endif ~}
 
 # --- ClusterMesh (ready to pair with another cluster) --------------------
 clustermesh:

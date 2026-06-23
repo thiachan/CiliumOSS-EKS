@@ -1,7 +1,7 @@
 # FULL DEPLOYMENT — End-to-End, Step by Step
 
 This is the complete, manual walkthrough for standing up an **Amazon EKS** cluster in
-**Sydney (`ap-southeast-2`)** running the **open-source Isovalent stack** — **Cilium**
+**Sydney (`ap-southeast-2`)** running the **Isovalent Enterprise stack** — **Cilium**
 replacing the AWS VPC CNI, **Tetragon** for runtime security, **Hubble** for observability,
 **WireGuard** encryption, and **ClusterMesh** ready to pair — then deploying lab apps on top.
 
@@ -88,7 +88,7 @@ flowchart TB
     YOU["Your Mac<br/>terraform · kubectl · cilium · hubble"]
     subgraph AWS["AWS · ap-southeast-2 (Sydney)"]
         subgraph VPC["VPC 10.42.0.0/16 · 3 AZs · NAT gateway"]
-            subgraph EKS["EKS cluster: isovalent-syd (k8s 1.30)"]
+            subgraph EKS["EKS cluster: isovalent-syd (k8s 1.36)"]
                 CP["Control plane (AWS-managed)<br/>API server · etcd · scheduler"]
                 subgraph NG["Managed node group · 2 × m5.large"]
                     subgraph N1["Worker node 1"]
@@ -241,7 +241,7 @@ Confirm versions and architecture:
 ```bash
 $ terraform version          # want >= 1.6
 $ aws --version              # want aws-cli/2.x
-$ kubectl version --client   # want >= 1.30
+$ kubectl version --client   # want >= 1.30, matching the 1.36 control plane
 $ helm version
 $ cilium version             # client
 $ file "$(brew --prefix)/bin/kubectl"
@@ -385,10 +385,18 @@ Before applying, know the moving parts (all under `terraform/`):
 | File | Creates |
 |------|---------|
 | `vpc.tf` | VPC `10.42.0.0/16`, 3 AZs, public + private subnets, single NAT gateway |
-| `eks.tf` | EKS control plane (k8s 1.30), one managed node group (2 × `m5.large`), CoreDNS add-on. **The `vpc-cni` add-on is deliberately NOT installed.** |
-| `cilium.tf` | A bootstrap step that **deletes `aws-node` and `kube-proxy`**, then a Helm release installing Cilium |
-| `tetragon.tf` | Helm release installing Tetragon |
-| `cilium/values.yaml.tftpl` | Cilium config: ENI mode, kube-proxy replacement, WireGuard, Hubble + UI, ClusterMesh |
+| `eks.tf` | EKS control plane (k8s 1.36), one managed node group (2 × `m5.large`), CoreDNS add-on. **The `vpc-cni` add-on is deliberately NOT installed.** |
+| `cilium.tf` | A bootstrap step that **deletes `aws-node` and `kube-proxy`**, the Isovalent Enterprise pull secret, then a Helm release installing **Enterprise Cilium** (`isovalent/cilium`) |
+| `tetragon.tf` | Helm release installing **Enterprise Tetragon** (`isovalent/tetragon`) |
+| `timescape.tf` | **Opt-in** (`enable_timescape=true`): namespace, `clickhouse-operator`, and `hubble-timescape` (push mode) for correlated network + runtime history |
+| `cilium/values.yaml.tftpl` | Cilium config: ENI mode, kube-proxy replacement, WireGuard, Hubble + UI, ClusterMesh, and (when Timescape is enabled) the Hubble→Timescape flow export |
+
+> **Enterprise images need a pull secret.** All charts pull from `quay.io/isovalent`, so
+> export the Isovalent/Cisco-issued Docker config JSON before applying (never commit it):
+>
+> ```bash
+> export TF_VAR_isovalent_pull_secret_json="$(cat isovalent-pull-secret.json)"
+> ```
 
 > **What you'll learn:** the exact resources Terraform creates, and *why* the config makes
 > the unusual choices it does (no VPC CNI, kube-proxy deleted, nodes briefly `NotReady`).
@@ -416,14 +424,25 @@ Tunables live in `terraform/terraform.tfvars`:
 ```hcl
 region            = "ap-southeast-2"
 cluster_name      = "isovalent-syd"
-cluster_version   = "1.30"
+cluster_version   = "1.36"
 instance_type     = "m5.large"
 node_desired_size = 2
 node_min_size     = 2
 node_max_size     = 2     # capped at 2 to stay under a default 5-vCPU quota
-cilium_version    = "1.15.6"
-tetragon_version  = "1.1.2"
+cilium_version    = "1.18.10"   # Isovalent Enterprise chart (helm.isovalent.com)
+tetragon_version  = "1.18.3"    # Isovalent Enterprise chart (helm.isovalent.com)
 ```
+
+> **Enterprise images need a pull secret.** The Enterprise charts pull from
+> `quay.io/isovalent/...`, so supply the Isovalent/Cisco-issued Docker config JSON
+> out-of-band (never commit it):
+>
+> ```bash
+> export TF_VAR_isovalent_pull_secret_json="$(cat isovalent-pull-secret.json)"
+> ```
+>
+> Terraform then creates the `isovalent-pull-secret` in `kube-system` and wires it into both
+> Helm releases automatically.
 
 > **Check yourself:** before applying, you should be able to explain, out loud: which file
 > creates the VPC, which file removes `aws-node`/`kube-proxy`, and where Cilium's WireGuard
@@ -472,7 +491,7 @@ Apply complete! Resources: 66 added, 0 changed, 0 destroyed.
 Outputs:
 cluster_endpoint = "https://XXXXXXXX.sk1.ap-southeast-2.eks.amazonaws.com"
 cluster_name = "isovalent-syd"
-cluster_version = "1.30"
+cluster_version = "1.36"
 region = "ap-southeast-2"
 update_kubeconfig_command = "aws eks update-kubeconfig --region ap-southeast-2 --name isovalent-syd"
 ```
@@ -508,8 +527,8 @@ Check the nodes — both should be `Ready`:
 ```bash
 $ kubectl get nodes -o wide
 NAME                                              STATUS   ROLES    AGE   VERSION
-ip-10-42-47-112.ap-southeast-2.compute.internal   Ready    <none>   5m    v1.30.x
-ip-10-42-5-120.ap-southeast-2.compute.internal    Ready    <none>   5m    v1.30.x
+ip-10-42-47-112.ap-southeast-2.compute.internal   Ready    <none>   5m    v1.36.x
+ip-10-42-5-120.ap-southeast-2.compute.internal    Ready    <none>   5m    v1.36.x
 ```
 
 Confirm the **AWS VPC CNI is gone** — only `cilium` and `tetragon` DaemonSets should exist,
@@ -927,6 +946,55 @@ is **not** required after that; just retry your `kubectl` command.
 ```bash
 $ brew install cilium-cli hubble
 ```
+
+### 10.7 EKS console shows no workloads / "Services (0)"
+
+In the AWS EKS console you see a blue banner and empty resource tabs:
+
+```
+Your current IAM principal doesn't have access to Kubernetes objects on this cluster.
+This might be due to the current principal not having an IAM access entry with permissions
+to access the cluster.
+```
+
+**Cause:** the EKS console renders the **Workloads / Services / Cluster** tabs by calling the
+Kubernetes API *as the IAM principal you are signed into the AWS console with*. The cluster
+creator (e.g. `user/ftdv-tf-admin`, used by your **CLI**) has access automatically, which is
+why `kubectl get pods -A` shows everything — but the **console** session is usually a
+different principal (often a federated/SSO role such as
+`AWSReservedSSO_AdministratorAccess_…`) that has **no EKS access entry**, so the API returns
+nothing. The workloads are running fine; the console simply can't see them.
+
+**Confirm the workloads actually exist (CLI bypasses the issue):**
+
+```bash
+$ kubectl get pods -A          # all pods Running across boutique, kube-system, etc.
+```
+
+**Fix (console, quickest):** click **Create access entry** in the blue banner — it pre-fills
+your current console principal. Assign the **`AmazonEKSClusterAdminPolicy`** access policy with
+a **cluster** scope, save, then refresh the page. All namespaces, workloads and services now
+appear. *(This is the path used for this build.)*
+
+**Fix (CLI alternative):** find your console role ARN (top-right account menu → "Federated
+Login"), then:
+
+```bash
+$ CONSOLE_ARN="arn:aws:iam::<account-id>:role/<your-console-role>"
+
+$ aws eks create-access-entry \
+    --cluster-name isovalent-syd --region ap-southeast-2 \
+    --principal-arn "$CONSOLE_ARN" --type STANDARD
+
+$ aws eks associate-access-policy \
+    --cluster-name isovalent-syd --region ap-southeast-2 \
+    --principal-arn "$CONSOLE_ARN" \
+    --access-scope type=cluster \
+    --policy-arn arn:aws:eks/AmazonEKSClusterAdminPolicy
+```
+
+> To manage this as code instead of a one-off, add the principal to the `access_entries`
+> map on `module.eks` in [terraform/eks.tf](terraform/eks.tf) so it survives re-applies.
 
 ---
 
