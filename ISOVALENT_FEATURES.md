@@ -62,6 +62,7 @@ Before the labs, read [Section 0](#0-core-concepts-the-mental-model) once — it
 16. [Gateway API / Ingress with Cilium](#16-gateway-api--ingress-with-cilium)
 17. [Mutual authentication (mTLS-style identity)](#17-mutual-authentication-mtls-style-identity)
 18. [Export flows to OpenTelemetry / SIEM](#18-export-flows-to-opentelemetry--siem)
+19. [Hubble Timescape — historical network + runtime](#19-hubble-timescape--historical-network--runtime)
 
 **Reference**
 - [Glossary](#glossary)
@@ -619,6 +620,119 @@ $ hubble observe --follow -o json | your-shipper
 
 Pair Tetragon's `tetra getevents -o json` with the same pipeline to get **network + runtime**
 security telemetry in one place.
+
+---
+
+## 19. Hubble Timescape — historical network + runtime
+
+> **What you'll learn:** how to turn on the Enterprise **Hubble Timescape** store, confirm
+> Cilium is streaming flows into it, and query **past** network flows and Tetragon runtime
+> events — the single pane that open-source Hubble cannot give you (live-only, in-memory).
+>
+> **Enterprise only.** Requires the Isovalent licence/pull secret. This repo provisions
+> Timescape in **push mode**: Cilium streams flows straight to the ingester's gRPC API; the
+> ingester writes to ClickHouse. No object storage or exporter is involved.
+
+### 19.1 Concept — why Timescape
+
+Hubble (Labs 1–2) shows flows **as they happen** and keeps only a small in-memory ring
+buffer. Tetragon (Labs 12–13) streams process/runtime events, also live. Neither retains
+history, and they are **separate** event streams. **Timescape** ingests **both** into
+ClickHouse so you can ask *retrospective* questions — "who talked to `cartservice` last
+Tuesday, and which process opened that connection?" — and see network + runtime correlated.
+
+```mermaid
+flowchart LR
+    Cilium["Cilium agent<br/>hubble.export.timescape"] -->|"gRPC :4260"| Ing["Timescape ingester"]
+    Ing --> CH[("ClickHouse")]
+    CH --> Srv["Timescape server<br/>(Hubble Observer API)"]
+    Srv --> UI["Timescape UI"]
+```
+
+### 19.2 Enable it
+
+From `terraform/`, with the pull secret exported (see
+[FULL_DEPLOYMENT.md](FULL_DEPLOYMENT.md#5-understand-what-terraform-will-build)):
+
+```bash
+$ export TF_VAR_isovalent_pull_secret_json="$(cat isovalent-pull-secret.json)"
+$ terraform apply -var enable_timescape=true
+```
+
+This adds the `hubble-timescape` namespace, the `clickhouse-operator`, the `hubble-timescape`
+release, and folds the `hubble.export.timescape` flow export into the in-place Cilium update.
+
+### 19.3 Verify the stack is up
+
+```bash
+$ kubectl -n hubble-timescape get pods
+NAME                                         READY   STATUS    RESTARTS   AGE
+chi-clickhouse-hubble-timescape-...          1/1     Running   0          3m
+clickhouse-operator-...                      1/1     Running   0          4m
+hubble-timescape-ingester-...                1/1     Running   0          3m
+hubble-timescape-server-...                  1/1     Running   0          3m
+hubble-timescape-ui-...                      1/1     Running   0          3m
+```
+
+All pods `Running`. If the ingester/server are `ImagePullBackOff`, the pull secret was not
+supplied — re-run with `TF_VAR_isovalent_pull_secret_json` set.
+
+### 19.4 Confirm Cilium is pushing flows
+
+Check the export target landed in the Cilium config, then watch the ingester receive flows:
+
+```bash
+# The push target should reference the ingester service on port 4260.
+$ kubectl -n kube-system get cm cilium-config -o yaml | grep -i timescape
+#   ...expect a hubble export entry pointing at
+#   hubble-timescape-ingester.hubble-timescape.svc.cluster.local:4260
+
+# The ingester logs the flows it is accepting and writing to ClickHouse.
+$ kubectl -n hubble-timescape logs deploy/hubble-timescape-ingester | grep -iE "flow|insert|push" | tail
+```
+
+Generate some traffic so there is something to ingest (re-uses the lab apps):
+
+```bash
+$ kubectl -n boutique exec deploy/frontend -- wget -qO- http://cartservice:7070 >/dev/null 2>&1 || true
+$ for i in $(seq 1 20); do kubectl -n default exec deploy/tiefighter -- \
+    curl -s -XPOST deathstar.default.svc.cluster.local/v1/request-landing >/dev/null; done
+```
+
+### 19.5 Query historical network + runtime
+
+The Timescape **server** speaks the Hubble Observer API, so the familiar `hubble` CLI can
+query the **past** against it (not just the live buffer):
+
+```bash
+# Point hubble at the Timescape server instead of Hubble Relay.
+$ kubectl -n hubble-timescape port-forward svc/hubble-timescape-server 4245:4244 >/dev/null 2>&1 &
+
+# Ask retrospective questions with --since / --until.
+$ hubble observe --server localhost:4245 \
+    --since 1h --namespace boutique --to-pod cartservice
+$ hubble observe --server localhost:4245 \
+    --since 24h --protocol http --http-method POST
+```
+
+Or use the UI for the correlated, historical service map:
+
+```bash
+$ kubectl -n hubble-timescape port-forward svc/hubble-timescape-ui 8080:80
+#   then open http://localhost:8080 and pick a past time window
+```
+
+### 19.6 Prove it — network + runtime in one place
+
+1. In the UI (or via `hubble observe --server localhost:4245`), select a window from a few
+   minutes ago and confirm the `tiefighter → deathstar` POSTs from 19.4 appear **after the
+   fact** — live Hubble would have already discarded them.
+2. Timescape also retains the **Tetragon** events for that window, so you can pivot from a
+   suspicious flow to the exact process that caused it — the correlation OSS Hubble cannot do.
+
+> **Tear it back down** when finished to stop the extra pods:
+> `terraform apply` (without `-var enable_timescape=true`) removes the Timescape stack and
+> the flow export, leaving the base Enterprise cluster intact.
 
 ---
 

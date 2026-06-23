@@ -363,8 +363,8 @@ $ aws sts get-caller-identity
 ## 4. Get the code
 
 ```bash
-$ git clone https://github.com/thiachan/CiliumOSS-EKS.git
-$ cd CiliumOSS-EKS
+$ git clone https://github.com/thiachan/CiliumEnterprise-EKS.git
+$ cd CiliumEnterprise-EKS
 ```
 
 Take a look at the layout:
