@@ -39,10 +39,12 @@ Done. Useful next steps:
   # Hubble UI (service map + L7 flows)
   cilium hubble ui
 
-  # Star Wars L7 policy in action (allowed vs denied)
-  XWING=$(kubectl get pod -l class=xwing -o jsonpath='{.items[0].metadata.name}')
-  kubectl exec "$XWING" -- curl -s -XPOST deathstar.default.svc.cluster.local/v1/request-landing
-  kubectl exec "$XWING" -- curl -s -XPUT  deathstar.default.svc.cluster.local/v1/exhaust-port   # should be denied
+  # Star Wars L7 policy in action (allowed vs L7-denied vs L3/L4-dropped)
+  # Empire tiefighter is allowed to land, but denied the exhaust-port API at L7:
+  kubectl exec tiefighter -- curl -s -XPOST deathstar.default.svc.cluster.local/v1/request-landing   # Ship landed
+  kubectl exec tiefighter -- curl -s -XPUT  deathstar.default.svc.cluster.local/v1/exhaust-port      # Access denied (L7)
+  # Rebel xwing is dropped at L3/L4 (connection times out):
+  kubectl exec xwing -- curl -s -m5 -XPOST deathstar.default.svc.cluster.local/v1/request-landing    # dropped
 
   # Tetragon runtime events
   kubectl -n kube-system exec -it ds/tetragon -c tetragon -- tetra getevents -o compact

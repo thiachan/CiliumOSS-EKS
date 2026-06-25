@@ -1,5 +1,6 @@
-# Classic Cilium L7 demo: X-wings (allied) may POST /v1/request-landing on the
-# deathstar; the trapped tie-fighter (empire) and any PUT /v1/exhaust-port are denied.
+# Classic Cilium L7 demo: Empire tie-fighters (org=empire) may POST
+# /v1/request-landing on the deathstar; rebel X-wings (org=alliance) are dropped
+# at L3/L4, and even an allowed Empire ship is denied PUT /v1/exhaust-port at L7.
 apiVersion: "cilium.io/v2"
 kind: CiliumNetworkPolicy
 metadata:
@@ -13,7 +14,7 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels:
-            org: alliance
+            org: empire
       toPorts:
         - ports:
             - port: "80"
